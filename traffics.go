@@ -89,7 +89,8 @@ func (t *Traffics) Start(ctx context.Context) error {
 
 func (t *Traffics) initOutbound() error {
 	var (
-		systemResolver resolve.Resolver = resolve.NewSystemResolver()
+		defaultResolver resolve.Resolver = resolve.NewCachedResolverFromResolver(resolve.NewSystemResolver(),
+			constant.DefaultResolverCacheSize, constant.DefaultResolverCacheTTL)
 	)
 
 	// build dialer first
@@ -103,10 +104,10 @@ func (t *Traffics) initOutbound() error {
 			return fmt.Errorf("duplicated remote name: %s", v.Name)
 		}
 
-		realResolver := systemResolver
+		realResolver := defaultResolver
 		if v.DNS != "" {
-			realResolver = resolve.NewCachedResolverDefault(
-				resolve.NewRawClient(net.Dialer{}, v.DNS))
+			realResolver = resolve.NewCachedResolverFromExchanger(
+				resolve.NewRawClient(net.Dialer{}, v.DNS), constant.DefaultResolverCacheSize)
 		}
 		var bind4, bind6 netip.Addr
 		bind4 = v.BindAddress4

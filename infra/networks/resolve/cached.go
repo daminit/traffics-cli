@@ -18,13 +18,18 @@ type cacheResult struct {
 }
 
 type CachedResolver struct {
-	client Exchanger
-	cache  *cache.LruCache[string, cacheResult]
+	resolver  Resolver
+	exchanger Exchanger
+	cache     *cache.LruCache[string, cacheResult]
+	ttl       int
 }
 
-func NewCachedResolver(client Exchanger, size int) *CachedResolver {
+func NewCachedResolverFromExchanger(client Exchanger, size int) *CachedResolver {
+	if size < 4 {
+		panic("too small")
+	}
 	return &CachedResolver{
-		client: client,
+		exchanger: client,
 		cache: cache.New[string, cacheResult](
 			cache.WithSize[string, cacheResult](size),
 			cache.WithAge[string, cacheResult](86400), // max one day
@@ -32,8 +37,22 @@ func NewCachedResolver(client Exchanger, size int) *CachedResolver {
 	}
 }
 
-func NewCachedResolverDefault(client Exchanger) *CachedResolver {
-	return NewCachedResolver(client, 1024)
+func NewCachedResolverFromResolver(client Resolver, size int, ttl int) *CachedResolver {
+	if size < 4 || ttl < 4 {
+		panic("too small")
+	}
+	if _, ok := client.(*CachedResolver); ok {
+		panic("nested CachedResolver")
+	}
+
+	return &CachedResolver{
+		resolver: client,
+		ttl:      ttl,
+		cache: cache.New[string, cacheResult](
+			cache.WithSize[string, cacheResult](size),
+			cache.WithAge[string, cacheResult](86400), // max one day
+		),
+	}
 }
 
 func (c *CachedResolver) Lookup(ctx context.Context, fqdn string, strategy meta.Strategy) (A []netip.Addr, AAAA []netip.Addr, err error) {
@@ -47,7 +66,30 @@ func (c *CachedResolver) Lookup(ctx context.Context, fqdn string, strategy meta.
 	if len(A) != 0 || len(AAAA) != 0 {
 		return A, AAAA, nil
 	}
+	if c.exchanger != nil { // use exchanger to get more detailed info
+		A, AAAA, err = c.newExchange(ctx, fqdn, strategy)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve: %w", err)
+		}
+	} else if c.resolver != nil && c.ttl != 0 {
+		A, AAAA, err = c.resolver.Lookup(ctx, fqdn, strategy)
+		err = c.storeLookup(fqdn, A, AAAA)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve: %w", err)
+		}
+	} else {
+		panic("both Exchanger and Resolver not found or not configured.")
+	}
 
+	A, AAAA = FilterAddress(A, AAAA, strategy)
+	if len(A) == 0 && len(AAAA) == 0 {
+		return nil, nil, fmt.Errorf("resolve: no available address found for %s", fqdn)
+	}
+
+	return A, AAAA, nil
+}
+
+func (c *CachedResolver) newExchange(ctx context.Context, fqdn string, strategy meta.Strategy) (A, AAAA []netip.Addr, err error) {
 	group := task.Group{}
 
 	if strategy != meta.StrategyIPv6Only {
@@ -73,14 +115,8 @@ func (c *CachedResolver) Lookup(ctx context.Context, fqdn string, strategy meta.
 
 	err = group.Run(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve: exchange failed for %s : %w", fqdn, err)
+		return nil, nil, fmt.Errorf("exchange failed for %s : %w", fqdn, err)
 	}
-
-	A, AAAA = FilterAddress(A, AAAA, strategy)
-	if len(A) == 0 && len(AAAA) == 0 {
-		return nil, nil, fmt.Errorf("resolve: no available address found for %s", fqdn)
-	}
-
 	return A, AAAA, nil
 }
 
@@ -95,7 +131,7 @@ func (c *CachedResolver) lookupToExchange(ctx context.Context, fqdn string, quer
 		},
 	}
 
-	resp, err := c.client.Exchange(
+	resp, err := c.exchanger.Exchange(
 		ctx,
 		question,
 	)
@@ -104,7 +140,7 @@ func (c *CachedResolver) lookupToExchange(ctx context.Context, fqdn string, quer
 	}
 
 	if resp == nil {
-		panic("client return a nil dns message without error")
+		panic("exchanger return a nil dns message without error")
 	}
 	if resp.Rcode != dns.RcodeSuccess {
 		return nil, RcodeError(resp.Rcode)
@@ -116,16 +152,30 @@ func (c *CachedResolver) lookupToExchange(ctx context.Context, fqdn string, quer
 		return nil, errors.New("truncated")
 	}
 
-	err = c.store(resp)
+	err = c.storeMsg(resp)
 	if err != nil {
 		return nil, err
 	}
 	return MessageToAddresses(resp)
 }
 
-func (c *CachedResolver) store(msg *dns.Msg) error {
+func (c *CachedResolver) storeLookup(fqdn string, A, AAAA []netip.Addr) error {
+	if len(A) == 0 && len(AAAA) == 0 || !dns.IsFqdn(fqdn) {
+		return fmt.Errorf("store a bad lookup result")
+	}
+
+	expire := time.Now().Add(time.Duration(c.ttl) * time.Second)
+	result := cacheResult{
+		A:    A,
+		AAAA: AAAA,
+	}
+	c.cache.StoreWithExpire(fqdn, result, expire)
+	return nil
+}
+
+func (c *CachedResolver) storeMsg(msg *dns.Msg) error {
 	if msg == nil || len(msg.Question) != 1 || len(msg.Answer) == 0 {
-		return errors.New("store a bad message")
+		return fmt.Errorf("store a bad message")
 	}
 
 	minTTL := uint32(0)

@@ -11,6 +11,9 @@ const (
 	DefaultResolverReadTimeout = 5 * time.Second
 	DefaultUDPReadBufferSize   = 65507
 	DefaultUDPKeepAlive        = 60 * time.Second
+
+	DefaultResolverCacheTTL  = 300 // seconds
+	DefaultResolverCacheSize = 512
 )
 
 const (
