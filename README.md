@@ -98,7 +98,7 @@ name://server:port?param=value&param=value
 
 - `disable`: Disable logging (default: false)
 - `level`: Log level - debug, info, warn, error (default: info)
-- `format`: Log format - console,json (default: console)
+- `format`: Log format - console, json (default: console)
 
 ### Bind Configuration
 

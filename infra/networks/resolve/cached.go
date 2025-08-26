@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
+	"time"
+
 	"github.com/daminit/traffics-cli/infra/meta"
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing/common/cache"
 	"github.com/sagernet/sing/common/task"
-	"net/netip"
-	"time"
 )
 
 type cacheResult struct {
@@ -25,9 +26,6 @@ type CachedResolver struct {
 }
 
 func NewCachedResolverFromExchanger(client Exchanger, size int) *CachedResolver {
-	if size < 4 {
-		panic("too small")
-	}
 	return &CachedResolver{
 		exchanger: client,
 		cache: cache.New[string, cacheResult](
@@ -38,13 +36,6 @@ func NewCachedResolverFromExchanger(client Exchanger, size int) *CachedResolver 
 }
 
 func NewCachedResolverFromResolver(client Resolver, size int, ttl int) *CachedResolver {
-	if size < 4 || ttl < 4 {
-		panic("too small")
-	}
-	if _, ok := client.(*CachedResolver); ok {
-		panic("nested CachedResolver")
-	}
-
 	return &CachedResolver{
 		resolver: client,
 		ttl:      ttl,

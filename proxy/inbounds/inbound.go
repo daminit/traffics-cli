@@ -4,14 +4,15 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/netip"
+
 	"github.com/daminit/traffics-cli/infra/constant"
 	"github.com/daminit/traffics-cli/infra/logging"
 	"github.com/daminit/traffics-cli/infra/meta"
 	"github.com/daminit/traffics-cli/infra/networks/listener"
 	"github.com/sagernet/sing/common"
-	"log/slog"
-	"net"
-	"net/netip"
 )
 
 type PacketWriter interface {
@@ -20,10 +21,6 @@ type PacketWriter interface {
 
 type PacketHandler interface {
 	HandlePacket(p []byte, remote netip.AddrPort, pw PacketWriter)
-}
-
-type PacketHandlerOOb interface {
-	HandlePacketOOb(oob []byte, p []byte, remote netip.AddrPort, pw PacketWriter)
 }
 
 type ConnHandler interface {
@@ -54,9 +51,8 @@ type Inbound struct {
 	UDPBufferSize int
 
 	// Handler
-	PacketHandler    PacketHandler
-	PacketHandlerOOb PacketHandlerOOb
-	ConnHandler      ConnHandler
+	PacketHandler PacketHandler
+	ConnHandler   ConnHandler
 
 	// internal
 	udpConn     *net.UDPConn
@@ -81,8 +77,8 @@ func (o *Inbound) Start(ctx context.Context) error {
 		go o.loopTcp()
 	}
 	if o.Protocols.Contains(string(meta.ProtocolUDP)) {
-		if o.PacketHandler == nil && o.PacketHandlerOOb == nil {
-			return fmt.Errorf("inbounds: PacketHandler or PacketHandlerOOb required")
+		if o.PacketHandler == nil {
+			return fmt.Errorf("inbounds: PacketHandler required")
 		}
 		o.udpConn, err = o.Listener.ListenUDP(o.ctx, o.Address, o.Port)
 		if err != nil {
@@ -116,28 +112,6 @@ func (o *Inbound) loopUdpIn() {
 			continue
 		}
 		o.PacketHandler.HandlePacket(buf[:n], remote, o)
-	}
-}
-
-// Deprecated: useless
-func (o *Inbound) loopUdpInOOb() {
-	bufferSize := cmp.Or(o.UDPBufferSize, constant.DefaultUDPReadBufferSize)
-	buf := make([]byte, bufferSize)
-	oob := make([]byte, 1024)
-	for {
-		n, oobN, _, remote, err := o.udpConn.ReadMsgUDPAddrPort(buf[0:bufferSize], oob[0:len(oob)])
-		if err != nil {
-			if common.Done(o.ctx) {
-				return
-			}
-			o.Logger.ErrorContext(o.ctx, "read udp message", slog.String("error", err.Error()))
-			continue
-		}
-		if n == 0 {
-			o.Logger.WarnContext(o.ctx, "read a zero size udp message without error")
-			continue
-		}
-		o.PacketHandlerOOb.HandlePacketOOb(oob[:oobN], buf[:n], remote, o)
 	}
 }
 

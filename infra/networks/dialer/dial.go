@@ -5,17 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
+	"runtime"
+	"strconv"
+	"time"
+
 	"github.com/daminit/traffics-cli/infra/constant"
 	"github.com/daminit/traffics-cli/infra/meta"
 	"github.com/daminit/traffics-cli/infra/networks/resolve"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/common/metadata"
-	"net"
-	"net/netip"
-	"runtime"
-	"strconv"
-	"time"
 )
 
 type Dialer interface {
@@ -82,28 +83,23 @@ func NewDefault(config DialConfig) (*DefaultDialer, error) {
 	}
 
 	var (
-		dialer4 net.Dialer
-		dialer6 net.Dialer
+		dialer4 = dialer
+		dialer6 = dialer
 
-		udpDialer4 net.Dialer
-		udpDialer6 net.Dialer
-
-		udpAddr4 string
-		udpAddr6 string
+		udpDialer4 = dialer
+		udpDialer6 = dialer
 	)
 
 	if config.BindAddress4.IsValid() {
 		bind := config.BindAddress4
 		dialer4.LocalAddr = &net.TCPAddr{IP: bind.AsSlice()}
 		udpDialer4.LocalAddr = &net.UDPAddr{IP: bind.AsSlice()}
-		udpAddr4 = bind.String()
 	}
 
 	if config.BindAddress6.IsValid() {
 		bind := config.BindAddress6
 		dialer6.LocalAddr = &net.TCPAddr{IP: bind.AsSlice()}
 		udpDialer6.LocalAddr = &net.UDPAddr{IP: bind.AsSlice()}
-		udpAddr6 = bind.String()
 	}
 
 	return &DefaultDialer{
@@ -112,8 +108,6 @@ func NewDefault(config DialConfig) (*DefaultDialer, error) {
 		dialer6:         dialer6,
 		udpDialer4:      udpDialer4,
 		udpDialer6:      udpDialer6,
-		udpAddr4:        udpAddr4,
-		udpAddr6:        udpAddr6,
 		resolver:        config.Resolver,
 		resolveStrategy: config.Strategy,
 	}, nil
